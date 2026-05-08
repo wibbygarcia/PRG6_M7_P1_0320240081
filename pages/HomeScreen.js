@@ -1,268 +1,229 @@
-import React, {
-    useState,
-    useEffect,
-    useMemo,
-    useRef} from "react";
-import { View, Text, SafeAreaView, StyleSheet,
-    TouchableOpacity,
-    ScrollView,
-    Alert,
-    TextInput} from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Button } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+// Gunakan useCameraPermissions dan komponen CameraView
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
-const HomeScreen = () => {
+export default function HomeScreen() {
 
-    // 2. STATE UNTUK STATUS TOMBOL CHECK-IN
+    const navigation = useNavigation();
+
+    const [permission, requestPermission] = useCameraPermissions();
+
+    // State untuk menyimpan data hasil scan
+    const [scannedData, setScannedData] = useState(null);
+
+    // State untuk mengontrol apakah scanner aktif atau "terkunci" (setelah berhasil scan)
+    const [isScanning, setIsScanning] = useState(true);
+
     const [isCheckedIn, setIsCheckedIn] = useState(false);
 
-    // 3. STATE UNTUK JAM DIGITAL
-    const [currentTime, setCurrentTime] = useState('Memuat jam...');
+    // GANTI DENGAN IP LAPTOP MASING-MASING
+    const BASE_URL = "http://10.1.10.77:8080/api/presensi";
 
-    // 4. STATE & REF UNTUK CATATAN (Baru)
-    const [note, setNote] = useState('');
-    const noteInputRef = useRef(null); // Membuat "kait" kosong untuk UI
+    // 1. Jika status permission masih loading
+    if (!permission) {
+        return <View style={styles.container}><Text>Memuat perizinan kamera...</Text></View>;
+    }
 
-    // Simulasi statis karena data dipindah ke HistoryScreen
-    const attendanceStats = useMemo( () => {
-        return { totalPresent: 12, totalAbsent: 2 };
-    }, []);
+    // 2. Jika user belum memberikan izin atau menolak
+    if (!permission.granted) {
+        return (
+            <View style={styles.container}>
+                <Text style={styles.infoText}>
+                    Aplikasi butuh akses kamera untuk memindai QR Code Presensi Dosen!
+                </Text>
+                <TouchableOpacity style={styles.buttonRequest} onPress={requestPermission}>
+                    <Text style={styles.buttonText}>Aktifkan Kamera</Text>
+                </TouchableOpacity>
+            </View>
+        );
+    }
 
-    useEffect( () => {
-        const timer = setInterval( () => {
-            setCurrentTime(new Date().toLocaleTimeString('id-ID'));
-        }, 1000);
-        return () => clearInterval(timer);
-    }, []);
+    // 3. Fungsi saat QR Code terdeteksi kamera
+    const handleBarCodeScanned = ({ type, data }) => {
+        // Jika sedang terkunci, abaikan scan agar tidak looping
+        if (!isScanning) return;
 
-    const handleCheckIn = () => {
-        if (isCheckedIn) return Alert.alert( "Perhatian", "Anda sudah Check In.");
-        if (note.trim() === '') {
-            Alert.alert( "Peringatan", "Catatan kehadiran wajib diisi!");
-            noteInputRef.current.focus();
-            return;
+        // Kunci scanner
+        setIsScanning(false);
+
+        try {
+            // Ubah teks JSON dari QR Code menjadi Objek JavaScript
+            const qrData = JSON.parse(data);
+            setScannedData(qrData);
+
+            Alert.alert(
+                "QR Code Terdeteksi",
+                `Mata Kuliah: ${qrData.kodeMk}\nPertemuan: ${qrData.pertemuanKe}\nRuangan: ${qrData.ruangan}\n\nLanjutkan Presensi (Check-In)?`,
+                [
+                    {
+                        text: "Batal",
+                        onPress: () => {
+                            // Reset jika batal
+                            setIsScanning(true);
+                            setScannedData(null);
+                        },
+                        style: "cancel"
+                    },
+                    {
+                        text: "Ya, Check In",
+                        // Lemparkan objek hasil parse ke fungsi submit
+                        onPress: () => handleSubmitPresensi(qrData)
+                    },
+                ]
+            );
+        } catch (error) {
+            // Handle jika QR Code yang di-scan bukan format JSON (misal salah scan QR Link biasa)
+            Alert.alert("QR Tidak Valid", "Pastikan Anda memindai QR Code Presensi Dosen.");
+            setIsScanning(true);
         }
-        setIsCheckedIn(true);
-        Alert.alert("Sukses", `Berhasil Check In pada pukul ${currentTime}`);
     };
 
+    // 4. Fungsi kirim data ke API .NET Core / Spring Boot
+    const handleSubmitPresensi = async (qrData) => {
+        // Payload dinamis mengambil nilai dari objek qrData
+        const payload = {
+            kodeMk: qrData.kodeMk,
+            nimMhs: "0325260031", // Simulasi NIM User yang login
+            pertemuanKe: qrData.pertemuanKe,
+            date: new Date().toISOString().split('T')[0],
+            jamPresensi: new Date().toLocaleTimeString('en-GB'),
+            status: "Present",
+            ruangan: qrData.ruangan
+        };
+
+        try {
+            const response = await fetch(BASE_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                setIsCheckedIn(true);
+                Alert.alert("Berhasil!", "Presensi sukses dicatat ke Database.", [
+                    { text: "Lihat Riwayat", onPress: () => navigation.navigate('History') }
+                ]);
+            } else {
+                Alert.alert("Gagal", result.message || "Terjadi kesalahan di server.");
+            }
+        } catch (error) {
+            Alert.alert("Error Jaringan", "Pastikan IP Laptop benar dan API berjalan.");
+            console.error(error);
+        } finally {
+            // Reset state agar siap untuk presensi selanjutnya
+            setIsScanning(true);
+            setScannedData(null);
+        }
+    };
+
+    // 5. Render UI
     return (
-        <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={styles.content}>
-                <View style={styles.headerRow}>
-                    <Text style={styles.title}>Attendance App</Text>
-                    {/* Tampilkan State Jam Digital */}
-                    <Text style={styles.clockText}>{currentTime}</Text>
-                </View>
-
-                {/* Student Card */}
-                <View style={styles.card}>
-                    <View style={styles.icon}>
-                        <MaterialIcons name="person" size={40} color="#555" />
+        <View style={styles.container}>
+            <CameraView
+                style={StyleSheet.absoluteFillObject} // Kamera penuh layar
+                facing="back" // Gunakan kamera belakang
+                // KUNCI UTAMA: Aktifkan pendeteksi QR Code
+                onBarcodeScanned={isScanning ? handleBarCodeScanned : undefined}
+                barcodeScannerSettings={{
+                    barCodeTypes: ["qr"], // Batasi HANYA memindai QR Code agar lebih cepat
+                }}
+            >
+                {/* Desain Overlay Kotak Pemandu di tengah layar */}
+                <View style={styles.overlay}>
+                    <View style={styles.unfocusedContainer}></View>
+                    <View style={styles.focusedContainer}>
+                        <View style={styles.borderCornerTopLeft} />
+                        <View style={styles.borderCornerTopRight} />
+                        <View style={styles.borderCornerBottomLeft} />
+                        <View style={styles.borderCornerBottomRight} />
                     </View>
-                    <View>
-                        <Text style={styles.name}>Wibby Garcia Kurniawan</Text>
-                        <Text>NIM : 0320240081</Text>
-                        <Text>Class : Informatika-2A</Text>
-                    </View>
-                </View>
+                    <View style={styles.unfocusedContainer}>
+                        <Text style={styles.scanText}>Arahkan Kamera ke QR Code Dosen</Text>
 
-                {/* Today's Class */}
-                <View style={styles.classCard}>
-                    <Text style={styles.subtitle}>Today's Class</Text>
-                    <Text>Mobile Programming</Text>
-                    <Text>08:00 - 10:00</Text>
-                    <Text>Lab 3</Text>
-
-                    {/* Fitur Baru: Kolom Input Catatan dengan useRef */}
-                    {!isCheckedIn && (
-                        <TextInput
-                            ref={noteInputRef} // <-- Menempelkan referensi ke elemen ini
-                            style={styles.inputCatatan}
-                            placeholder="Tulis catatan (cth: Hadir lab)"
-                            value={note}
-                            onChangeText={setNote}
-                        />
-                    )}
-
-                    <TouchableOpacity
-                        style={[styles.button, isCheckedIn ? styles.buttonDisabled : styles.buttonActive]}
-                        onPress={handleCheckIn}
-                        disabled={isCheckedIn}
-                    >
-                        <Text style={styles.buttonText}>
-                            {isCheckedIn ? "CHECKED IN" : "CHECK IN"}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Fitur Baru: Statistik Kehadiran (Hasil useMemo) */}
-                <View style={styles.statsCard}>
-                    <View style={styles.statBox}>
-                        <Text style={styles.statNumber}>{attendanceStats.totalPresent}</Text>
-                        <Text style={styles.statLabel}>Total Present</Text>
-                    </View>
-                    <View style={styles.statBox}>
-                        <Text style={[styles.statNumber, { color: 'red' }]}>{attendanceStats.totalAbsent}</Text>
-                        <Text style={styles.statLabel}>Total Absent</Text>
+                        {/* Tombol darurat jika scanner terkunci */}
+                        {!isScanning && (
+                            <Button title="Scan Lagi" onPress={() => setIsScanning(true)} color="#ffc107" />
+                        )}
                     </View>
                 </View>
-            </ScrollView>
-        </SafeAreaView>
+            </CameraView>
+        </View>
     );
-};
+}
 
+// 6. Styling kotak overlay scanner
 const styles = StyleSheet.create({
-        container : {
-            flex : 1,
-            padding : 20,
-            backgroundColor : "#f5f5f5"
-        },
+    container: {
+        flex: 1,
+        backgroundColor: 'black',
+    },
+    infoText: {
+        color: 'white',
+        textAlign: 'center',
+        margin: 30,
+        fontSize: 16,
+    },
+    buttonRequest: {
+        backgroundColor: '#0056b3',
+        padding: 15,
+        borderRadius: 10,
+        alignSelf: 'center',
+    },
+    buttonText: {
+        color: 'white',
+        fontWeight: 'bold',
+    },
 
-        title: {
-            fonstSize : 24,
-            fontWeight : "bold"
-        },
+    // Styling Overlay Scanner
+    overlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)', // Latar gelap transparan
+    },
+    unfocusedContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    focusedContainer: {
+        width: 250, // Ukuran kotak pemandu
+        height: 250,
+        alignSelf: 'center',
+        backgroundColor: 'transparent',
+        position: 'relative',
+    },
 
-        card: {
-            flexDirection: "row",
-            backgroundColor: "white",
-            padding: 15,
-            borderRadius: 10,
-            marginBottom: 20,
-        },
+    scanText: {
+        color: 'white',
+        fontSize: 16,
+        marginTop: 20,
+        fontWeight: 'bold',
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        padding: 10,
+        borderRadius: 5,
+    },
 
-        icon: {
-            width: 60,
-            height: 60,
-            borderRadius: 30,
-            backgroundColor: "#eee",
-            alignItems: "center",
-            justifyContent: "center",
-            marginRight: 15,
-        },
-
-        name: {
-            fontSize: 18,
-            fontWeight: "bold",
-        },
-
-        subtitle:{
-            fontSize: 18,
-            fontWeight: "bold",
-            marginBottom: 10
-        },
-
-        button: {
-            marginTop: 10,
-            backgroundColor: "#007AFF",
-            padding: 10,
-            borderRadius: 8,
-            alignItems: "center",
-        },
-
-        buttonText: {
-            color: "white",
-        },
-
-        content : {
-            padding : 20,
-            paddingBottom : 40
-        },
-
-        item: {
-            flexDirection: "row",
-            justifyContent: "space-between",
-            backgroundColor: "white",
-            padding: 12,
-            borderRadius: 8,
-            marginBottom: 8,
-        },
-
-        course: {
-            fontSize: 16,
-        },
-
-        date: {
-            fontSize: 12,
-            color: "gray",
-        },
-
-        present: {
-            color: "green",
-            fontWeight: "bold",
-        },
-
-        absent: {
-            color: "red",
-            fontWeight: "bold",
-        },
-        
-        statusRow: {
-            flexDirection: "row",
-            alignItems: "center",
-        },
-
-        headerRow: {
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 10,
-        },
-
-        clockText: {
-            fontSIze: 16,
-            fontWeight: 'bold',
-            color: '#007AFF',
-            fontVariant: ['tabular-nums']
-        },
-
-        buttonActive: {
-            backgroundColor : "#007AFF",
-        },
-
-        buttonDisabled: {
-            backgroundColor: '#A0C4FF',
-        },
-
-        inputCatatan: {
-            borderWidth: 1,
-            borderColor: "#ccc",
-            borderRadius: 8,
-            padding: 10,
-            marginTop: 10,
-        },
-
-        summaryBox: {
-            marginTop: 10,
-            padding: 10,
-            backgroundColor: "#eee",
-            borderRadius: 8,
-        },
-
-        statsCard: {
-            flexDirection: "row",
-            justifyContent: "space-between",
-            marginTop: 10,
-        },
-
-        statBox: {
-            flex: 1,
-            backgroundColor: "#fff",
-            padding: 15,
-            marginHorizontal: 5,
-            borderRadius: 10,
-            alignItems: "center",
-        },
-
-        statNumber: {
-            fontSize: 20,
-            fontWeight: "bold",
-        },
-
-        statLabel: {
-            fontSize: 12,
-            color: "gray",
-        },
-    });
-
-export default HomeScreen;
+    // Membuat Sudut Kotak Biru
+    borderCornerTopLeft: {
+        position: 'absolute', top: 0, left: 0, width: 40, height: 40,
+        borderTopWidth: 5, borderLeftWidth: 5, borderColor: '#007bff',
+    },
+    borderCornerTopRight: {
+        position: 'absolute', top: 0, right: 0, width: 40, height: 40,
+        borderTopWidth: 5, borderRightWidth: 5, borderColor: '#007bff',
+    },
+    borderCornerBottomLeft: {
+        position: 'absolute', bottom: 0, left: 0, width: 40, height: 40,
+        borderBottomWidth: 5, borderLeftWidth: 5, borderColor: '#007bff',
+    },
+    borderCornerBottomRight: {
+        position: 'absolute', bottom: 0, right: 0, width: 40, height: 40,
+        borderBottomWidth: 5, borderRightWidth: 5, borderColor: '#007bff',
+    },
+});
